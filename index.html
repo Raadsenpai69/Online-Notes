@@ -35,10 +35,12 @@
     }
     button:hover { opacity: 0.9; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #saveBtn, #loginBtn { background: #4caf50; color: white; }
-    #newBtn, #signupBtn { background: #2196f3; color: white; }
-    #deleteBtn { background: #f44336; color: white; }
+    #saveBtn, #loginBtn, #createBtn { background: #4caf50; color: white; }
+    #newBtn, #showSignupBtn { background: #2196f3; color: white; }
+    #deleteBtn, #confirmDeleteAccountBtn { background: #f44336; color: white; }
     #logoutBtn { background: #607d8b; color: white; margin: 0; padding: 6px 14px; font-size: 14px; }
+    #deleteAccountBtn { background: transparent; color: #f44336; border: 1px solid #f44336; margin: 0; padding: 6px 14px; font-size: 14px; }
+    #cancelDeleteAccountBtn, #backToLoginBtn { background: #e0e0e0; color: #333; }
     .note-item {
       background: white;
       border: 1px solid #ddd;
@@ -73,8 +75,8 @@
       border-radius: 12px;
       padding: 20px 24px;
     }
-    #authMsg { text-align: center; font-size: 14px; min-height: 20px; color: #f44336; }
-    #authMsg.ok { color: #2e7d32; }
+    .auth-msg { text-align: center; font-size: 14px; min-height: 20px; color: #f44336; }
+    .auth-msg.ok { color: #2e7d32; }
     .auth-buttons { text-align: center; }
     .hidden { display: none; }
     #topBar {
@@ -84,7 +86,17 @@
       gap: 10px;
       font-size: 14px;
       color: #555;
+      flex-wrap: wrap;
     }
+    #deleteAccountPanel {
+      background: #fff5f5;
+      border: 1px solid #f44336;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+    #deleteAccountPanel p { margin: 4px 0 0; }
   </style>
 </head>
 <body>
@@ -92,21 +104,50 @@
 
   <!-- ============ LOGIN / SIGN UP ============ -->
   <div id="authView" class="hidden">
-    <h2 style="margin-top:0">Welcome</h2>
-    <input type="email" id="email" placeholder="Email" autocomplete="email">
-    <input type="password" id="password" placeholder="Password (min 6 characters)" autocomplete="current-password">
-    <div id="authMsg"></div>
-    <div class="auth-buttons">
-      <button id="loginBtn">Log in</button>
-      <button id="signupBtn">Sign up</button>
+
+    <!-- Login panel (default) -->
+    <div id="loginPanel">
+      <h2 style="margin-top:0">Welcome</h2>
+      <input type="text" id="loginId" placeholder="Username or email" autocomplete="username">
+      <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+      <div id="loginMsg" class="auth-msg"></div>
+      <div class="auth-buttons">
+        <button id="loginBtn">Log in</button>
+        <button id="showSignupBtn">Sign up</button>
+      </div>
+    </div>
+
+    <!-- Sign-up panel -->
+    <div id="signupPanel" class="hidden">
+      <h2 style="margin-top:0">Create account</h2>
+      <input type="text" id="suUsername" placeholder="Username (3-20 letters, numbers, _)" autocomplete="off" maxlength="20">
+      <input type="email" id="suEmail" placeholder="Email" autocomplete="email">
+      <input type="password" id="suPassword" placeholder="Password (min 6 characters)" autocomplete="new-password">
+      <input type="password" id="suConfirm" placeholder="Confirm password" autocomplete="new-password">
+      <div id="signupMsg" class="auth-msg"></div>
+      <div class="auth-buttons">
+        <button id="createBtn">Create account</button>
+        <button id="backToLoginBtn">Back to login</button>
+      </div>
     </div>
   </div>
 
   <!-- ============ NOTES APP ============ -->
   <div id="appView" class="hidden">
     <div id="topBar">
-      <span id="userEmail"></span>
+      <span>Signed in as <strong id="userName"></strong></span>
       <button id="logoutBtn">Log out</button>
+      <button id="deleteAccountBtn">Delete account</button>
+    </div>
+
+    <div id="deleteAccountPanel" class="hidden">
+      <strong>Delete your account?</strong>
+      <p>This permanently deletes your account and all of your notes. It cannot be undone.</p>
+      <input type="text" id="deleteConfirmInput" placeholder='Type DELETE to confirm' autocomplete="off">
+      <div style="text-align:center;">
+        <button id="confirmDeleteAccountBtn">Delete my account</button>
+        <button id="cancelDeleteAccountBtn">Cancel</button>
+      </div>
     </div>
 
     <input type="text" id="title" placeholder="Note title...">
@@ -148,7 +189,6 @@
     const titleInput = $('title');
     const contentInput = $('content');
     const statusEl = $('status');
-    const authMsg = $('authMsg');
 
     // =============================
     // Helpers
@@ -160,9 +200,21 @@
       setTimeout(() => statusEl.style.opacity = 0, 1800);
     }
 
-    function setAuthMsg(msg, ok = false) {
-      authMsg.textContent = msg;
-      authMsg.classList.toggle('ok', ok);
+    function setMsg(el, msg, ok = false) {
+      el.textContent = msg;
+      el.classList.toggle('ok', ok);
+    }
+
+    function showLoginPanel() {
+      $('signupPanel').classList.add('hidden');
+      $('loginPanel').classList.remove('hidden');
+      setMsg($('signupMsg'), '');
+    }
+
+    function showSignupPanel() {
+      $('loginPanel').classList.add('hidden');
+      $('signupPanel').classList.remove('hidden');
+      setMsg($('loginMsg'), '');
     }
 
     function showAuth() {
@@ -170,38 +222,87 @@
       $('appView').classList.add('hidden');
     }
 
-    function showApp(user) {
+    function showApp() {
       $('authView').classList.add('hidden');
       $('appView').classList.remove('hidden');
-      $('userEmail').textContent = user.email || '';
     }
 
+    const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
+
     // =============================
-    // Auth
+    // Auth: login (username OR email)
     // =============================
     async function login() {
-      const email = $('email').value.trim();
-      const password = $('password').value;
-      if (!email || !password) return setAuthMsg("Enter your email and password.");
-      setAuthMsg("");
+      const id = $('loginId').value.trim();
+      const password = $('loginPassword').value;
+      const msg = $('loginMsg');
+      if (!id || !password) return setMsg(msg, "Enter your username/email and password.");
+      setMsg(msg, "");
       $('loginBtn').disabled = true;
-      const { error } = await sb.auth.signInWithPassword({ email, password });
-      $('loginBtn').disabled = false;
-      if (error) setAuthMsg(error.message);
+
+      try {
+        let email = id;
+        if (!id.includes('@')) {
+          // Treat it as a username: look up the matching email
+          const { data, error } = await sb.rpc('get_login_email', { identifier: id });
+          if (error || !data) {
+            setMsg(msg, "Invalid username/email or password.");
+            return;
+          }
+          email = data;
+        }
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) {
+          setMsg(msg, error.message === "Invalid login credentials"
+            ? "Invalid username/email or password."
+            : error.message);
+        }
+      } finally {
+        $('loginBtn').disabled = false;
+      }
     }
 
+    // =============================
+    // Auth: sign up
+    // =============================
     async function signup() {
-      const email = $('email').value.trim();
-      const password = $('password').value;
-      if (!email || !password) return setAuthMsg("Enter your email and password.");
-      if (password.length < 6) return setAuthMsg("Password must be at least 6 characters.");
-      setAuthMsg("");
-      $('signupBtn').disabled = true;
-      const { data, error } = await sb.auth.signUp({ email, password });
-      $('signupBtn').disabled = false;
-      if (error) return setAuthMsg(error.message);
-      if (!data.session) {
-        setAuthMsg("Account created! Check your email to confirm, then log in.", true);
+      const username = $('suUsername').value.trim();
+      const email = $('suEmail').value.trim();
+      const password = $('suPassword').value;
+      const confirm = $('suConfirm').value;
+      const msg = $('signupMsg');
+
+      if (!username || !email || !password || !confirm) return setMsg(msg, "Please fill in all fields.");
+      if (!USERNAME_RE.test(username)) return setMsg(msg, "Username must be 3-20 characters: letters, numbers or _ only.");
+      if (password.length < 6) return setMsg(msg, "Password must be at least 6 characters.");
+      if (password !== confirm) return setMsg(msg, "Passwords do not match.");
+
+      setMsg(msg, "");
+      $('createBtn').disabled = true;
+
+      try {
+        const { data: available, error: checkErr } = await sb.rpc('username_available', { name: username });
+        if (checkErr) return setMsg(msg, "Could not check username. Try again.");
+        if (!available) return setMsg(msg, "That username is already taken.");
+
+        const { data, error } = await sb.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { username },
+            // Send the confirmation link back to this exact page
+            emailRedirectTo: window.location.origin + window.location.pathname
+          }
+        });
+        if (error) return setMsg(msg, error.message);
+
+        if (!data.session) {
+          setMsg(msg, "Account created! Check your email to confirm, then log in.", true);
+          $('suPassword').value = '';
+          $('suConfirm').value = '';
+        }
+      } finally {
+        $('createBtn').disabled = false;
       }
     }
 
@@ -210,14 +311,47 @@
       await sb.auth.signOut();
     }
 
-    // Runs on page load and whenever the user logs in/out
+    // =============================
+    // Auth: delete account
+    // =============================
+    function openDeletePanel() {
+      $('deleteConfirmInput').value = '';
+      $('deleteAccountPanel').classList.remove('hidden');
+      $('deleteConfirmInput').focus();
+    }
+
+    function closeDeletePanel() {
+      $('deleteAccountPanel').classList.add('hidden');
+      $('deleteConfirmInput').value = '';
+    }
+
+    async function deleteAccount() {
+      if ($('deleteConfirmInput').value.trim() !== 'DELETE') {
+        return showStatus('Type DELETE to confirm', true);
+      }
+      clearTimeout(typingTimeout);
+      $('confirmDeleteAccountBtn').disabled = true;
+      const { error } = await sb.rpc('delete_my_account');
+      $('confirmDeleteAccountBtn').disabled = false;
+      if (error) {
+        console.error("Failed to delete account:", error);
+        return showStatus("Could not delete account", true);
+      }
+      closeDeletePanel();
+      await sb.auth.signOut();
+      showStatus("Account deleted");
+    }
+
+    // =============================
+    // Auth state (runs on page load and on login/logout)
+    // =============================
     sb.auth.onAuthStateChange((event, session) => {
       if (session && session.user) {
-        showApp(session.user);
+        showApp();
         if (loadedForUser !== session.user.id) {
           loadedForUser = session.user.id;
           // setTimeout avoids calling Supabase inside its own auth callback
-          setTimeout(loadNotes, 0);
+          setTimeout(() => { loadProfile(session.user); loadNotes(); }, 0);
         }
       } else {
         loadedForUser = null;
@@ -226,10 +360,18 @@
         titleInput.value = '';
         contentInput.value = '';
         $('notesList').innerHTML = '';
-        $('password').value = '';
+        $('userName').textContent = '';
+        $('loginPassword').value = '';
+        closeDeletePanel();
+        showLoginPanel();
         showAuth();
       }
     });
+
+    async function loadProfile(user) {
+      const { data } = await sb.from('profiles').select('username').eq('id', user.id).maybeSingle();
+      $('userName').textContent = (data && data.username) || 'User';
+    }
 
     // =============================
     // Notes (each user only sees their own, enforced by the database)
@@ -356,12 +498,18 @@
     // Wire up buttons
     // =============================
     $('loginBtn').addEventListener('click', login);
-    $('signupBtn').addEventListener('click', signup);
+    $('showSignupBtn').addEventListener('click', showSignupPanel);
+    $('createBtn').addEventListener('click', signup);
+    $('backToLoginBtn').addEventListener('click', showLoginPanel);
     $('logoutBtn').addEventListener('click', logout);
+    $('deleteAccountBtn').addEventListener('click', openDeletePanel);
+    $('cancelDeleteAccountBtn').addEventListener('click', closeDeletePanel);
+    $('confirmDeleteAccountBtn').addEventListener('click', deleteAccount);
     $('saveBtn').addEventListener('click', saveNote);
     $('newBtn').addEventListener('click', newNote);
     $('deleteBtn').addEventListener('click', deleteNote);
-    $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+    $('loginPassword').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+    $('suConfirm').addEventListener('keydown', e => { if (e.key === 'Enter') signup(); });
   </script>
 </body>
 </html>
