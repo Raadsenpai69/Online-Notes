@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Notes</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #f8f9fb;
+    }
+    h1, h2 { text-align: center; }
+    input, textarea {
+      width: 100%;
+      font-size: 16px;
+      margin: 10px 0;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+    textarea { height: 150px; resize: none; }
+    button {
+      margin: 5px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+      transition: 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #saveBtn, #loginBtn { background: #4caf50; color: white; }
+    #newBtn, #signupBtn { background: #2196f3; color: white; }
+    #deleteBtn { background: #f44336; color: white; }
+    #logoutBtn { background: #607d8b; color: white; margin: 0; padding: 6px 14px; font-size: 14px; }
+    .note-item {
+      background: white;
+      border: 1px solid #ddd;
+      margin: 5px 0;
+      padding: 10px;
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #status {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #4caf50;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-weight: bold;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+      pointer-events: none;
+    }
+    #status.error { background: #f44336; }
+
+    /* Auth screen */
+    #authView {
+      max-width: 380px;
+      margin: 0 auto;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      padding: 20px 24px;
+    }
+    #authMsg { text-align: center; font-size: 14px; min-height: 20px; color: #f44336; }
+    #authMsg.ok { color: #2e7d32; }
+    .auth-buttons { text-align: center; }
+    .hidden { display: none; }
+    #topBar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <h1>📝 My Notes</h1>
+
+  <!-- ============ LOGIN / SIGN UP ============ -->
+  <div id="authView" class="hidden">
+    <h2 style="margin-top:0">Welcome</h2>
+    <input type="email" id="email" placeholder="Email" autocomplete="email">
+    <input type="password" id="password" placeholder="Password (min 6 characters)" autocomplete="current-password">
+    <div id="authMsg"></div>
+    <div class="auth-buttons">
+      <button id="loginBtn">Log in</button>
+      <button id="signupBtn">Sign up</button>
+    </div>
+  </div>
+
+  <!-- ============ NOTES APP ============ -->
+  <div id="appView" class="hidden">
+    <div id="topBar">
+      <span id="userEmail"></span>
+      <button id="logoutBtn">Log out</button>
+    </div>
+
+    <input type="text" id="title" placeholder="Note title...">
+    <textarea id="content" placeholder="Write your note here..."></textarea>
+
+    <div style="text-align:center;">
+      <button id="saveBtn">💾 Save</button>
+      <button id="newBtn">➕ New</button>
+      <button id="deleteBtn">🗑️ Delete</button>
+    </div>
+
+    <h2>Saved Notes</h2>
+    <div id="notesList"></div>
+  </div>
+
+  <div id="status">Saved!</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script>
+    // =============================
+    // Supabase Settings
+    // Paste your own values from: Supabase dashboard > Project Settings > API
+    // The "anon public" key is SAFE to put here (protected by Row Level Security).
+    // NEVER put the "service_role" key in this file.
+    // =============================
+    const SUPABASE_URL = "https://weboyfebxrffcormlpia.supabase.co/rest/v1/";
+    const SUPABASE_ANON_KEY = "sb_publishable_Un6_QJn7_cgfHj-hJYpziQ_aYacXogh";
+
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let notes = [];
+    let currentId = null;
+    let typingTimeout;
+    let saving = false;
+    let saveQueued = false;
+    let loadedForUser = null;
+
+    const $ = id => document.getElementById(id);
+    const titleInput = $('title');
+    const contentInput = $('content');
+    const statusEl = $('status');
+    const authMsg = $('authMsg');
+
+    // =============================
+    // Helpers
+    // =============================
+    function showStatus(msg = "Saved!", isError = false) {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle('error', isError);
+      statusEl.style.opacity = 1;
+      setTimeout(() => statusEl.style.opacity = 0, 1800);
+    }
+
+    function setAuthMsg(msg, ok = false) {
+      authMsg.textContent = msg;
+      authMsg.classList.toggle('ok', ok);
+    }
+
+    function showAuth() {
+      $('authView').classList.remove('hidden');
+      $('appView').classList.add('hidden');
+    }
+
+    function showApp(user) {
+      $('authView').classList.add('hidden');
+      $('appView').classList.remove('hidden');
+      $('userEmail').textContent = user.email || '';
+    }
+
+    // =============================
+    // Auth
+    // =============================
+    async function login() {
+      const email = $('email').value.trim();
+      const password = $('password').value;
+      if (!email || !password) return setAuthMsg("Enter your email and password.");
+      setAuthMsg("");
+      $('loginBtn').disabled = true;
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      $('loginBtn').disabled = false;
+      if (error) setAuthMsg(error.message);
+    }
+
+    async function signup() {
+      const email = $('email').value.trim();
+      const password = $('password').value;
+      if (!email || !password) return setAuthMsg("Enter your email and password.");
+      if (password.length < 6) return setAuthMsg("Password must be at least 6 characters.");
+      setAuthMsg("");
+      $('signupBtn').disabled = true;
+      const { data, error } = await sb.auth.signUp({ email, password });
+      $('signupBtn').disabled = false;
+      if (error) return setAuthMsg(error.message);
+      if (!data.session) {
+        setAuthMsg("Account created! Check your email to confirm, then log in.", true);
+      }
+    }
+
+    async function logout() {
+      clearTimeout(typingTimeout);
+      await sb.auth.signOut();
+    }
+
+    // Runs on page load and whenever the user logs in/out
+    sb.auth.onAuthStateChange((event, session) => {
+      if (session && session.user) {
+        showApp(session.user);
+        if (loadedForUser !== session.user.id) {
+          loadedForUser = session.user.id;
+          // setTimeout avoids calling Supabase inside its own auth callback
+          setTimeout(loadNotes, 0);
+        }
+      } else {
+        loadedForUser = null;
+        notes = [];
+        currentId = null;
+        titleInput.value = '';
+        contentInput.value = '';
+        $('notesList').innerHTML = '';
+        $('password').value = '';
+        showAuth();
+      }
+    });
+
+    // =============================
+    // Notes (each user only sees their own, enforced by the database)
+    // =============================
+    async function loadNotes() {
+      const { data, error } = await sb
+        .from('notes')
+        .select('id, title, content')
+        .order('updated_at', { ascending: false });
+
+      if (error) {
+        console.error("Failed to load notes:", error);
+        showStatus("Failed to load notes", true);
+        return;
+      }
+      notes = data || [];
+      renderNotes();
+    }
+
+    function renderNotes() {
+      const list = $('notesList');
+      list.innerHTML = '';
+      notes.forEach(n => {
+        const div = document.createElement('div');
+        div.className = 'note-item';
+
+        const strong = document.createElement('strong');
+        strong.textContent = n.title || "(No title)"; // textContent prevents HTML injection
+
+        const btn = document.createElement('button');
+        btn.textContent = 'View';
+        btn.addEventListener('click', () => loadNote(n.id));
+
+        div.append(strong, btn);
+        list.appendChild(div);
+      });
+    }
+
+    function loadNote(id) {
+      const n = notes.find(x => x.id === id);
+      if (!n) return;
+      clearTimeout(typingTimeout);
+      currentId = id;
+      titleInput.value = n.title;
+      contentInput.value = n.content;
+      showStatus("Note loaded!");
+    }
+
+    function newNote() {
+      clearTimeout(typingTimeout);
+      currentId = null;
+      titleInput.value = '';
+      contentInput.value = '';
+      showStatus("New note ready!");
+    }
+
+    async function saveNote() {
+      clearTimeout(typingTimeout);
+      const title = titleInput.value.trim();
+      const content = contentInput.value.trim();
+      if (!title && !content) return;
+
+      // Avoid two saves running at once (would create duplicate notes)
+      if (saving) { saveQueued = true; return; }
+      saving = true;
+
+      try {
+        if (currentId === null) {
+          const { data, error } = await sb
+            .from('notes')
+            .insert({ title, content })
+            .select('id, title, content')
+            .single();
+          if (error) throw error;
+          notes.unshift(data);
+          currentId = data.id;
+        } else {
+          const { error } = await sb
+            .from('notes')
+            .update({ title, content, updated_at: new Date().toISOString() })
+            .eq('id', currentId);
+          if (error) throw error;
+          const i = notes.findIndex(n => n.id === currentId);
+          if (i !== -1) notes[i] = { id: currentId, title, content };
+        }
+        renderNotes();
+        showStatus();
+      } catch (err) {
+        console.error("Failed to save note:", err);
+        showStatus("Save failed", true);
+      } finally {
+        saving = false;
+        if (saveQueued) { saveQueued = false; saveNote(); }
+      }
+    }
+
+    async function deleteNote() {
+      if (currentId === null) return showStatus("No note selected!");
+      if (!confirm("Delete this note?")) return;
+
+      clearTimeout(typingTimeout);
+      const { error } = await sb.from('notes').delete().eq('id', currentId);
+      if (error) {
+        console.error("Failed to delete note:", error);
+        return showStatus("Delete failed", true);
+      }
+      notes = notes.filter(n => n.id !== currentId);
+      currentId = null;
+      titleInput.value = '';
+      contentInput.value = '';
+      renderNotes();
+      showStatus("Note deleted!");
+    }
+
+    // Auto-save after 2 seconds of inactivity
+    [titleInput, contentInput].forEach(input => {
+      input.addEventListener('input', () => {
+        clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(saveNote, 2000);
+      });
+    });
+
+    // =============================
+    // Wire up buttons
+    // =============================
+    $('loginBtn').addEventListener('click', login);
+    $('signupBtn').addEventListener('click', signup);
+    $('logoutBtn').addEventListener('click', logout);
+    $('saveBtn').addEventListener('click', saveNote);
+    $('newBtn').addEventListener('click', newNote);
+    $('deleteBtn').addEventListener('click', deleteNote);
+    $('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+  </script>
+</body>
+</html>
