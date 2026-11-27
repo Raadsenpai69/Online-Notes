@@ -40,7 +40,18 @@
     #deleteBtn, #confirmDeleteAccountBtn { background: #f44336; color: white; }
     #logoutBtn { background: #607d8b; color: white; margin: 0; padding: 6px 14px; font-size: 14px; }
     #deleteAccountBtn { background: transparent; color: #f44336; border: 1px solid #f44336; margin: 0; padding: 6px 14px; font-size: 14px; }
-    #cancelDeleteAccountBtn, #backToLoginBtn { background: #e0e0e0; color: #333; }
+    #cancelDeleteAccountBtn, #backToLoginBtn, #backToLoginBtn2, #cancelResetBtn { background: #e0e0e0; color: #333; }
+    #sendResetBtn, #updatePwBtn { background: #4caf50; color: white; }
+    .link-btn {
+      background: none;
+      border: none;
+      color: #2196f3;
+      font-size: 14px;
+      padding: 4px;
+      margin: 0;
+      text-decoration: underline;
+    }
+    .center { text-align: center; }
     .note-item {
       background: white;
       border: 1px solid #ddd;
@@ -115,6 +126,9 @@
         <button id="loginBtn">Log in</button>
         <button id="showSignupBtn">Sign up</button>
       </div>
+      <div class="center">
+        <button id="forgotLinkBtn" class="link-btn">Forgot password?</button>
+      </div>
     </div>
 
     <!-- Sign-up panel -->
@@ -128,6 +142,30 @@
       <div class="auth-buttons">
         <button id="createBtn">Create account</button>
         <button id="backToLoginBtn">Back to login</button>
+      </div>
+    </div>
+
+    <!-- Forgot password panel -->
+    <div id="forgotPanel" class="hidden">
+      <h2 style="margin-top:0">Reset password</h2>
+      <p style="font-size:14px;color:#555;text-align:center;margin:0">Enter your username or email and we'll send you a reset link.</p>
+      <input type="text" id="fpId" placeholder="Username or email" autocomplete="username">
+      <div id="forgotMsg" class="auth-msg"></div>
+      <div class="auth-buttons">
+        <button id="sendResetBtn">Send reset link</button>
+        <button id="backToLoginBtn2">Back to login</button>
+      </div>
+    </div>
+
+    <!-- Set new password panel (shown after clicking the email link) -->
+    <div id="resetPanel" class="hidden">
+      <h2 style="margin-top:0">Set new password</h2>
+      <input type="password" id="newPassword" placeholder="New password (min 6 characters)" autocomplete="new-password">
+      <input type="password" id="newConfirm" placeholder="Confirm new password" autocomplete="new-password">
+      <div id="resetMsg" class="auth-msg"></div>
+      <div class="auth-buttons">
+        <button id="updatePwBtn">Update password</button>
+        <button id="cancelResetBtn">Cancel</button>
       </div>
     </div>
   </div>
@@ -176,6 +214,11 @@
     const SUPABASE_URL = "https://weboyfebxrffcormlpia.supabase.co";
     const SUPABASE_ANON_KEY = "sb_publishable_Un6_QJn7_cgfHj-hJYpziQ_aYacXogh";
 
+    // Read email-link info from the URL before Supabase clears it
+    const linkHash = window.location.hash;
+    let recovering = linkHash.includes('type=recovery');   // opened a password-reset link
+    let expiredNotice = linkHash.includes('error_code=otp_expired'); // opened an expired link
+
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     let notes = [];
@@ -205,17 +248,18 @@
       el.classList.toggle('ok', ok);
     }
 
-    function showLoginPanel() {
-      $('signupPanel').classList.add('hidden');
-      $('loginPanel').classList.remove('hidden');
-      setMsg($('signupMsg'), '');
+    function showPanel(name) {
+      ['login', 'signup', 'forgot', 'reset'].forEach(p => {
+        $(p + 'Panel').classList.toggle('hidden', p !== name);
+      });
+      ['loginMsg', 'signupMsg', 'forgotMsg', 'resetMsg'].forEach(id => setMsg($(id), ''));
     }
-
-    function showSignupPanel() {
-      $('loginPanel').classList.add('hidden');
-      $('signupPanel').classList.remove('hidden');
-      setMsg($('loginMsg'), '');
-    }
+    const showLoginPanel = () => showPanel('login');
+    const showSignupPanel = () => showPanel('signup');
+    const showForgotPanel = () => {
+      $('fpId').value = $('loginId').value;
+      showPanel('forgot');
+    };
 
     function showAuth() {
       $('authView').classList.remove('hidden');
@@ -306,6 +350,75 @@
       }
     }
 
+    // =============================
+    // Auth: forgot password
+    // =============================
+    async function sendReset() {
+      const id = $('fpId').value.trim();
+      const msg = $('forgotMsg');
+      if (!id) return setMsg(msg, "Enter your username or email.");
+      setMsg(msg, "");
+      $('sendResetBtn').disabled = true;
+
+      try {
+        let email = id;
+        if (!id.includes('@')) {
+          const { data } = await sb.rpc('get_login_email', { identifier: id });
+          email = data || null;
+        }
+        if (email) {
+          const { error } = await sb.auth.resetPasswordForEmail(email, {
+            // The link in the email brings the user back to this page
+            redirectTo: window.location.origin + window.location.pathname
+          });
+          if (error && (error.status === 429 || /rate limit/i.test(error.message))) {
+            return setMsg(msg, "Too many requests. Please wait a few minutes and try again.");
+          }
+        }
+        // Same message whether or not the account exists (doesn't reveal who has an account)
+        setMsg(msg, "If an account exists, a reset link has been sent. Check your email (and spam folder).", true);
+      } finally {
+        $('sendResetBtn').disabled = false;
+      }
+    }
+
+    async function updatePassword() {
+      const pw = $('newPassword').value;
+      const cf = $('newConfirm').value;
+      const msg = $('resetMsg');
+      if (!pw || !cf) return setMsg(msg, "Please fill in both fields.");
+      if (pw.length < 6) return setMsg(msg, "Password must be at least 6 characters.");
+      if (pw !== cf) return setMsg(msg, "Passwords do not match.");
+
+      setMsg(msg, "");
+      $('updatePwBtn').disabled = true;
+      try {
+        const { data, error } = await sb.auth.updateUser({ password: pw });
+        if (error) return setMsg(msg, error.message);
+
+        recovering = false;
+        $('newPassword').value = '';
+        $('newConfirm').value = '';
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+
+        // Go straight into the app, already logged in
+        const user = data.user;
+        showApp();
+        loadedForUser = user.id;
+        loadProfile(user);
+        loadNotes();
+        showStatus("Password updated!");
+      } finally {
+        $('updatePwBtn').disabled = false;
+      }
+    }
+
+    async function cancelReset() {
+      recovering = false;
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      await sb.auth.signOut();
+    }
+
     async function logout() {
       clearTimeout(typingTimeout);
       await sb.auth.signOut();
@@ -346,6 +459,15 @@
     // Auth state (runs on page load and on login/logout)
     // =============================
     sb.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') recovering = true;
+
+      // Came from a reset link: ask for a new password instead of opening the app
+      if (recovering && session && session.user) {
+        showAuth();
+        showPanel('reset');
+        return;
+      }
+
       if (session && session.user) {
         showApp();
         if (loadedForUser !== session.user.id) {
@@ -365,6 +487,10 @@
         closeDeletePanel();
         showLoginPanel();
         showAuth();
+        if (expiredNotice) {
+          expiredNotice = false;
+          setMsg($('loginMsg'), "That email link has expired or was already used. Use 'Forgot password?' to get a new one.");
+        }
       }
     });
 
@@ -501,6 +627,13 @@
     $('showSignupBtn').addEventListener('click', showSignupPanel);
     $('createBtn').addEventListener('click', signup);
     $('backToLoginBtn').addEventListener('click', showLoginPanel);
+    $('backToLoginBtn2').addEventListener('click', showLoginPanel);
+    $('forgotLinkBtn').addEventListener('click', showForgotPanel);
+    $('sendResetBtn').addEventListener('click', sendReset);
+    $('updatePwBtn').addEventListener('click', updatePassword);
+    $('cancelResetBtn').addEventListener('click', cancelReset);
+    $('fpId').addEventListener('keydown', e => { if (e.key === 'Enter') sendReset(); });
+    $('newConfirm').addEventListener('keydown', e => { if (e.key === 'Enter') updatePassword(); });
     $('logoutBtn').addEventListener('click', logout);
     $('deleteAccountBtn').addEventListener('click', openDeletePanel);
     $('cancelDeleteAccountBtn').addEventListener('click', closeDeletePanel);
